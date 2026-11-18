@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-openpyxl
-firebase-admin
-google-genai
-pytest
