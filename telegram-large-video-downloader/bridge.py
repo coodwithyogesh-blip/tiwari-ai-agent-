@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Termux MTProto downloader -> authenticated HTTP upload bridge.
-
-Downloads a Telegram media message with a logged-in user session, then streams
-it to a configured HTTPS receiver. No Telegram session or secrets belong in Git.
-"""
+"""Download Telegram media with MTProto; optionally upload to a configured receiver."""
 import asyncio
 import os
 import sys
@@ -19,7 +15,7 @@ load_dotenv()
 def required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
-        raise SystemExit(f"Missing {name}. Copy .env.example to .env and fill it in.")
+        raise SystemExit(f"Missing {name}. Check your .env file.")
     return value
 
 
@@ -29,8 +25,8 @@ async def main() -> None:
 
     api_id = int(required("TG_API_ID"))
     api_hash = required("TG_API_HASH")
-    upload_url = required("RENDER_UPLOAD_URL")
-    upload_token = required("RENDER_UPLOAD_TOKEN")
+    upload_url = os.getenv("RENDER_UPLOAD_URL", "").strip()
+    upload_token = os.getenv("RENDER_UPLOAD_TOKEN", "").strip()
     download_dir = Path(os.getenv("DOWNLOAD_DIR", "./downloads")).expanduser()
     download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,7 +40,6 @@ async def main() -> None:
             raise SystemExit("Message not found or it has no downloadable media.")
 
         name = (message.file.name if message.file and message.file.name else f"telegram-{message_id}.bin")
-        # Avoid path traversal from a Telegram-supplied filename.
         safe_name = Path(name).name.replace("\\", "_") or f"telegram-{message_id}.bin"
         destination = download_dir / safe_name
         print(f"Downloading {safe_name} ...")
@@ -52,9 +47,15 @@ async def main() -> None:
         if not downloaded:
             raise SystemExit("Telegram download failed.")
 
+    size_mb = destination.stat().st_size / (1024 * 1024)
+    print(f"Downloaded {size_mb:.1f} MB.")
+    if not upload_url or not upload_token:
+        print("Render upload is not configured yet.")
+        print(f"Video safely saved on this phone: {destination.resolve()}")
+        return
+
+    print("Sending to Render ...")
     try:
-        size_mb = destination.stat().st_size / (1024 * 1024)
-        print(f"Downloaded {size_mb:.1f} MB. Sending to Render ...")
         with destination.open("rb") as stream:
             response = requests.post(
                 upload_url,
@@ -66,12 +67,13 @@ async def main() -> None:
         response.raise_for_status()
         print("Upload accepted by Render:")
         print(response.text[:2000])
-    finally:
-        try:
-            destination.unlink(missing_ok=True)
-            print("Temporary video deleted from phone.")
-        except OSError as exc:
-            print(f"Could not delete temporary file: {exc}")
+    except Exception:
+        print("Upload failed. The downloaded video has been kept on this phone.")
+        print(f"Saved at: {destination.resolve()}")
+        raise
+    else:
+        destination.unlink(missing_ok=True)
+        print("Render accepted the upload; local temporary video deleted.")
 
 
 if __name__ == "__main__":
